@@ -20,8 +20,35 @@ const buildMethods = [
     { test: endsWith('.js'), method: (path, src) => src },
 ];
 
+
+
 function svelteBuild(path, src) {
-    // todo: transform imports and components to dynamic syntax
+    const replace = (...args) => src = src.replace(...args);
+
+    // replace imports
+    // I should probably do this through recast so I can get a source map
+    let match;
+    while (match = src.match(/import (\w+) from ['"]([^'"]*\.svelte)['"]/)) {
+        let [str, cmpName, importPath] = match;
+        replace(str, `$: ${cmpName} = $dis['${importPath}']`);
+    }
+
+    // replace custom components with dynamic components
+    // recast won't help me here, but this transformation has never given me grief while debugging
+    replace(/<([A-Z]\w+)/g, '<svelte:component this={$1}');
+    replace(/<\/[A-Z]\w+>/g, '</svelte:component>');
+
+    // for future reference, how I handled adding preprocessors in the past
+    // I'm not sure what `plugin` was,
+    // but I suspect a required library rather than a string name
+    /*
+        if (opts.preprocess) {
+            for (let plugin of opts.preprocess) {
+                src = (await svelte.preprocess(src, plugin, { filename })).code;
+            }
+        }
+    */
+
     const { js } = compile(src, {
         filename: path,
         format: 'cjs',
@@ -52,7 +79,18 @@ const customRequire = (str) => {
     // @ is an alias referring to the src directory
     if (newPath.startsWith('@')) {
         if (dis[newPath]) return dis[newPath];
-        throw new Error('Aliased path not loaded: ' + str);
+        // building the import tree might be necessary,
+        // much as I don't want to do it
+        // either that or I need to integrate rollup somehow to handle it for me
+
+        // a quick hack is to wait until the requested file is in the store
+        return new Promise(resolve => {
+            dis.subscribe(store => {
+                if (store[newPath]) resolve(store[newPath]);
+            });
+            setTimeout(5000, () => reject(`${newPath} not loaded within 5 seconds.`));
+        })
+        newPath = path.resolve(path.resolve(__dirname, '..'), newPath.replace('@', '.'));
     }
     return require(newPath);
 }
@@ -62,29 +100,29 @@ const hydrateMethods = [
     { test: endsWith('.js'), method: jsHydrate },
 ];
 
-function catchHydrateError(path, src, cb) {
+function hydrate(path, code) {
     try {
-        return cb();
+        return (new AsyncFunction('require', code))(customRequire);
     } catch(e) {
-        console.warn(path, 'Error-throwing code:\n\n', src);
+        console.warn(path, 'Error-throwing code:\n\n', code);
         throw e;
     }
 }
+
+// Function() is in the global scope, but AsyncFunction is hidden
+const AsyncFunction = (async function() {}).constructor;
 
 async function jsHydrate(path, src) {
     const code = [
         'const module = { exports: {} };',
         'const exports = module.exports;',
-        src,
+        src.replace(/ require\(/g, ' await require('),
         'return module.exports;'
     ].join('\n');
 
-    return catchHydrateError(path, src, () => (new Function('require', code))(customRequire))
+    return hydrate(path, code);
 }
-// Function() is in the global scope, but AsyncFunction is hidden
-const AsyncFunction = (async function() {}).constructor;
 
-// doesn't use await, but I want to signal that it returns a promise
 async function svelteHydrate(path, src) {
     const code = [
         'const exports = {};',
@@ -92,7 +130,7 @@ async function svelteHydrate(path, src) {
         'return exports.default;'
     ].join('\n');
 
-    return catchHydrateError(path, src, () => (new AsyncFunction('require', code))(customRequire));
+    return hydrate(path, code);
 }
 
 function getHydrateMethod(path) {

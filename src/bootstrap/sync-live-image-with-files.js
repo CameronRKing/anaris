@@ -4,7 +4,7 @@ const { shouldIgnore, getBuildMethod, getHydrateMethod } = require('./build-chai
 
 // optional chokidar logging
 const watcherLog = [];
-window.shouldLogChokidarEvents = true;
+window.shouldLogChokidarEvents = false;
 function log(event, path) {
     if (!window.shouldLogChokidarEvents) return;
     console.log(event, path);
