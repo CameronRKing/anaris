@@ -6,10 +6,10 @@ const mapWithKeys = (obj, cb) => Object.entries(obj).map(cb).reduce((acc, [key, 
 
 
 // choosing which code to build
-const ignore = [
-    equals('@/index.js'),
-    startsWith('@/bootstrap/'),
-];
+// was relevant before core files were separated from app files
+// leaving it because when I get to exposing extensions to core behavior,
+// I know that I'll want it
+const ignore = [];
 exports.shouldIgnore = (str) => {
     return ignore.some(test => test(str));
 }
@@ -32,7 +32,7 @@ function svelteBuild(path, src) {
         let match;
         while (match = src.match(/import (\w+) from ['"]([^'"]*\.svelte)['"]/)) {
             let [str, cmpName, importPath] = match;
-            replace(str, `$: ${cmpName} = $dis['${importPath}']`);
+            replace(str, `$: ${cmpName} = $dis['${importPath}'] ? $dis['${importPath}'].default : null;`);
         }
 
         // replace custom components with dynamic components
@@ -79,24 +79,28 @@ exports.getBuildMethod = getBuildMethod;
 
 // hydration methods
 const path = require('path');
-const normalize = (str) => str.split(path.sep).join(path.posix.sep);
+const { normalizePath, aliases, hydratePathAliases } = require('./utils.js');
 const dis = require('./source-code-live-image.js');
 
 function customRequire(currFile, requiredFile) {
-    let newPath = normalize(requiredFile);
-    // resolve relative paths
+    let newPath = normalizePath(requiredFile);
+
+    // resolve relative paths and replace root folders with aliases
     if (newPath.startsWith('.')) {
-        const resolvedPath = path.posix.join(path.dirname(normalize(currFile)), newPath);
-        newPath = resolvedPath.replace(/^src\//, '@/');
+        const resolvedPath = path.posix.join(path.dirname(normalizePath(currFile)), newPath);
+        newPath = hydratePathAliases(resolvedPath);
     }
-    // @ is an alias referring to the src directory
-    if (newPath.startsWith('@')) {
+
+    // resolve user dependencies out of the store
+    if (Object.values(aliases).includes(newPath[0])) {
         if (dis[newPath]) return dis[newPath];
+
         // building the import tree might be necessary,
         // much as I don't want to do it
         // either that or I need to integrate a tool (what tool?) to handle it for me
-
         // a quick hack is to wait until the requested file is in the store
+        // it won't work for circular dependencies,
+        // but so far it seems to be working
         return new Promise(resolve => {
             const unsub = dis.subscribe(store => {
                 if (store[newPath]) {
@@ -107,13 +111,8 @@ function customRequire(currFile, requiredFile) {
             setTimeout(5000, () => reject(`${newPath} not loaded within 5 seconds.`));
         })
     }
-    try {
-        // let node take care of libraries
-        return require(newPath);
-    } catch(e) {
-        console.warn('Error in ' + currFile);
-        throw e;
-    }
+    // let node take care of libraries
+    return require(newPath);
 }
 
 const hydrateMethods = [
@@ -293,7 +292,7 @@ async function svelteHydrate(path, src) {
     const code = [
         'const exports = {};',
         src.replace(/ require\(/g, ' await require('),
-        'return exports.default;'
+        'return exports;'
     ].join('\n');
 
     return hydrate(path, code);

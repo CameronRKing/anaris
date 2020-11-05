@@ -3,7 +3,7 @@
   "productName": "svelte-electron-forge",
   "version": "1.0.0",
   "description": "Svelte + Electron Forge",
-  "main": "src/index.js",
+  "main": "core/main.js",
   "scripts": {
     "start": "concurrently \"npm:svelte-dev\" \"electron-forge start\"",
     "package": "electron-forge package",

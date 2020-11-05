@@ -2,31 +2,28 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 
 // Live Reload
-require('electron-reload')(__dirname + '/bootstrap', {
+require('electron-reload')(__dirname, {
   electron: path.join(__dirname, '../node_modules', '.bin', 'electron'),
   awaitWriteFinish: true
 });
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (require('electron-squirrel-startup')) {
-  // eslint-disable-line global-require
-  app.quit();
-}
-
 const createWindow = () => {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
+    // these bits should be user-configured
     width: 800,
     height: 600,
+    fullscreen: true,
     webPreferences: {
       nodeIntegration: true
     }
   });
 
   // and load the index.html of the app.
-  mainWindow.loadFile(path.join(__dirname, '../public/index.html'));
+  mainWindow.loadFile(path.join(__dirname, './index.html'));
 
   // Open the DevTools.
+  // this bit should be user-configured
   mainWindow.webContents.openDevTools();
 };
 

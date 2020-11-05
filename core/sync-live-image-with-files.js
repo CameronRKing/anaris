@@ -4,6 +4,7 @@ const { shouldIgnore, getBuildMethod, getHydrateMethod } = require('./build-chai
 
 // optional chokidar logging
 const watcherLog = [];
+// there should be a config file somewhere for this
 window.shouldLogChokidarEvents = false;
 function log(event, path) {
     if (!window.shouldLogChokidarEvents) return;
@@ -11,7 +12,17 @@ function log(event, path) {
     watcherLog.push([event, path, Date.now()]);
 }
 
-const watcher = chokidar.watch('./src');
+// chokidar seems to run relative to the place the process it started,
+// not relative to the filepath where the function is called
+//
+// this method loads and hydrates ALL files, regardless of whether they are used,
+// which means the initial load time is less than desirable,
+// and will only get worse as the apps folder grows
+// a more elegant method would be to load files when they are requested,
+// then add them to the watcher
+// even better would be unwatching them and deleting them from the image when they are no longer required
+// but that bit will be harder, I think
+const watcher = chokidar.watch(['./apps', './workspaces']);
 watcher.on('add', (path) => {
     log('add', path);
     buildChain(path);
@@ -22,12 +33,12 @@ watcher.on('change', (path) => {
 });
 
 const dis = require('./source-code-live-image.js');
-const path = require('path');
-const normalize = (str) => str.split(path.sep).join(path.posix.sep);
+const { normalizePath, hydratePathAliases } = require('./utils.js');
 
 function buildChain(path) {
-    const internalPath = normalize(path).replace(/^src\//, '@/');
+    const internalPath = hydratePathAliases(normalizePath(path));
     
+    console.log(internalPath);
     if (shouldIgnore(internalPath)) return;
 
     const build = (src) => getBuildMethod(path)(path, src);
