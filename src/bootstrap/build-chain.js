@@ -81,26 +81,40 @@ exports.getBuildMethod = getBuildMethod;
 const path = require('path');
 const normalize = (str) => str.split(path.sep).join(path.posix.sep);
 const dis = require('./source-code-live-image.js');
-const customRequire = (str) => {
-    let newPath = normalize(str);
+function customRequire(currFile, requiredFile) {
+    let newPath = normalize(requiredFile);
+    // resolve relative paths
+    if (newPath.startsWith('.')) {
+        const resolvedPath = path.posix.join(path.dirname(normalize(currFile)), newPath);
+        newPath = resolvedPath.replace(/^src\//, '@/');
+    }
     // @ is an alias referring to the src directory
     if (newPath.startsWith('@')) {
         if (dis[newPath]) return dis[newPath];
         // building the import tree might be necessary,
         // much as I don't want to do it
-        // either that or I need to integrate rollup somehow to handle it for me
+        // either that or I need to integrate a tool (what tool?) to handle it for me
 
         // a quick hack is to wait until the requested file is in the store
         return new Promise(resolve => {
-            dis.subscribe(store => {
-                if (store[newPath]) resolve(store[newPath]);
+            const unsub = dis.subscribe(store => {
+                if (store[newPath]) {
+                    unsub();
+                    resolve(store[newPath]);
+                }
             });
             setTimeout(5000, () => reject(`${newPath} not loaded within 5 seconds.`));
         })
-        newPath = path.resolve(path.resolve(__dirname, '..'), newPath.replace('@', '.'));
     }
-    return require(newPath);
+    try {
+        // let node take care of libraries
+        return require(newPath);
+    } catch(e) {
+        console.warn('Error in ' + currFile);
+        throw e;
+    }
 }
+window.customRequire = customRequire;
 
 const hydrateMethods = [
     { test: endsWith('.svelte'), method: svelteHydrate },
@@ -108,9 +122,9 @@ const hydrateMethods = [
     { test: endsWith('.json'), method: jsonHydrate },
 ];
 
-function hydrate(code) {
+function hydrate(path, code) {
     try {
-        return (new AsyncFunction('require', code))(customRequire);
+        return (new AsyncFunction('require', code))(customRequire.bind(null, path));
     } catch(e) {
         console.warn(path, 'Error-throwing code:\n\n', code);
         throw e;
@@ -121,46 +135,110 @@ function hydrate(code) {
 const AsyncFunction = (async function() {}).constructor;
 
 const recast = require('recast');
+const acorn = require('acorn');
+const parse = (src) => recast.parse(src, {
+    // the default parser wasn't parsing rest arguments in object destructures
+    parser: {
+        parse(source) {
+            return require('recast/parsers/acorn').parse(source, {
+                ecmaVersion: 'latest',
+                sourceType: 'module'
+            });
+        }
+    }
+});
 
-function convertES6ToCJS(src) {
-    const ast = recast.parse(src);
-    ast.program.body
-        .filter(node => node.type === 'ExportNamedDeclaration')
-        .map(node => {
-            const decl = node.declaration;
-            // the name of the declaration is in a different place for functions and varibles
-            let declName;
-            if (decl.type == 'FunctionDeclaration') {
-                declName = decl.id.name;
-            } else { // assume VariableDeclaration with a single variable
-                declName = decl.declarations[0].id.name;
+function convertImportToRequire(src) {
+    return astReplace(src, node => node.type === 'ImportDeclaration', node => {
+        const name = node.source.raw;
+        let specObj = {}, specNamespace;
+        node.specifiers.forEach(spec => {
+            switch (spec.type) {
+                case 'ImportDefaultSpecifier':
+                    specObj.default = spec.local.name;
+                    return;
+                case 'ImportNamespaceSpecifier':
+                    specNamespace = spec.local.name;
+                    return;
+                case 'ImportSpecifier':
+                    specObj[spec.imported.name] = spec.local.name;
             }
+        });
+        let specStr = JSON.stringify(specObj).replace(/"/g, '');
+        if (specNamespace) {
+            if (specStr == '{}') specStr = specNamespace;
+            else specStr = specStr.split('}')[0] + ` ...${specNamespace}}`;
+        }
+        const requireNode = parse(`const ${specStr} = require(${name});`).program.body[0];
+        return [node, requireNode];
+    });
+}
 
-            const cjsExport = recast.parse(`exports.${declName} = ${declName};`).program.body[0];
-            return [ast.program.body.indexOf(node), decl, cjsExport];
-        })
+// utility function, factor out in future
+function mapWithKeys(obj, cb) {
+    Object.entries(obj).map(cb).reduce((acc, [key, val]) => ({...acc, [key]: val }), {});
+}
+
+function astReplace(src, ffilter, mmap) {
+    const ast = parse(src);
+
+    const body = ast.program.body;
+    body.filter(ffilter)
+        .map(mmap)
         .reverse()
-        .forEach(([idx, decl, exp]) => ast.program.body.splice(idx, 1, decl, exp));
+        .forEach(([toReplace, ...nodes]) => body.splice(body.indexOf(toReplace), 1, ...nodes));
+
     return recast.print(ast).code;
 }
 
-async function jsHydrate(path, src) {
-    // can't easily handle ES6 modules
-    // a Stackoverflow answer suggested setting script src to a blob URL and using that for dynamic imports
-    // and it works--if I run the import in the console
-    // if I run the import directly in an Electron context, it causes the app to crash WITH NO MESSAGE ANYWHERE
-    // my best option is to write an AST transform from ES6 to CJS.
-    if (src.match(/^export /)) {
-        src = convertES6ToCJS(src);
-    }
-    const code = [
-        'const module = { exports: {} };',
-        'const exports = module.exports;',
-        src.replace(/ require\(/g, ' await require('),
-        'return module.exports;'
-    ].join('\n');
+// really I should implement this, but for now I'll just avoid the syntax
+function convertExportFrom(src) {
+    return astReplace(src, node => node.type.startsWith('Export') && node.source, node => {
+        const src = node.source.raw;
+        switch (node.type) {
+            case 'ExportNamedDeclaration':
+                const specs = mapWithKeys(node.specifiers, spec => [spec.local.name, spec.exported.name]);
+                break;
+            case 'ExportAllDeclaration':
+        }
+        // todo: map export <...> from 'stuff'
+        // to const <...> = require('stuff'); export <...>;
+        const [requireNode, exportNode] = parse(`const ${specs} = require(${src}); export ${specs};`);
+        return [];
+    });
+}
 
-    return hydrate(code);
+async function jsHydrate(path, src) {
+    try {
+        if (src.match(/^export /m)) {
+            try {
+                // I do need to replace all imports
+                // the browser context CAN access node libraries, but only through require()
+                src = convertImportToRequire(src);
+                // there is one problem remaining: customRequire() sometimes returns a promise
+                // I can't use async at the top level in modules
+                // I may need to convert exports too and go through the AsyncFunction() hydrator
+                src = `const require = customRequire.bind(null, '${normalize(path)}');\n` + src;
+                // see index.html for source and the reason why this strange pattern exists
+                return window.hydrateScript(path, src);
+            } catch(e) {
+                console.warn('Error hydrating ES6 code');
+                console.warn(src);
+                throw e;
+            }
+        }
+        src = [
+            'const module = { exports: {} };',
+            'const exports = module.exports;',
+            src.replace(/ require\(/g, ' await require('),
+            'return module.exports;'
+        ].join('\n');
+
+        return hydrate(path, src);
+    } catch(e) {
+        console.warn('Error in', path);
+        throw e;
+    }
 }
 
 async function svelteHydrate(path, src) {
@@ -170,7 +248,7 @@ async function svelteHydrate(path, src) {
         'return exports.default;'
     ].join('\n');
 
-    return hydrate(code);
+    return hydrate(path, code);
 }
 
 async function jsonHydrate(path, src) {
