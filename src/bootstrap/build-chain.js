@@ -2,6 +2,8 @@
 const equals = (match) => (str) => str === match;
 const startsWith = (match) => (str) => str.startsWith(match);
 const endsWith = (ext) => (str) => str.endsWith(ext);
+const mapWithKeys = (obj, cb) => Object.entries(obj).map(cb).reduce((acc, [key, val]) => ({...acc, [key]: val }), {});
+
 
 // choosing which code to build
 const ignore = [
@@ -20,8 +22,6 @@ const buildMethods = [
     { test: endsWith('.js'), method: (path, src) => src },
     { test: endsWith('.json'), method: (path, src) => src },
 ];
-
-
 
 function svelteBuild(path, src) {
     try {
@@ -81,6 +81,7 @@ exports.getBuildMethod = getBuildMethod;
 const path = require('path');
 const normalize = (str) => str.split(path.sep).join(path.posix.sep);
 const dis = require('./source-code-live-image.js');
+
 function customRequire(currFile, requiredFile) {
     let newPath = normalize(requiredFile);
     // resolve relative paths
@@ -114,13 +115,16 @@ function customRequire(currFile, requiredFile) {
         throw e;
     }
 }
-window.customRequire = customRequire;
 
 const hydrateMethods = [
     { test: endsWith('.svelte'), method: svelteHydrate },
     { test: endsWith('.js'), method: jsHydrate },
     { test: endsWith('.json'), method: jsonHydrate },
 ];
+
+
+// Function() is in the global scope, but AsyncFunction is hidden
+const AsyncFunction = (async function() {}).constructor;
 
 function hydrate(path, code) {
     try {
@@ -131,8 +135,6 @@ function hydrate(path, code) {
     }
 }
 
-// Function() is in the global scope, but AsyncFunction is hidden
-const AsyncFunction = (async function() {}).constructor;
 
 const recast = require('recast');
 const acorn = require('acorn');
@@ -147,6 +149,18 @@ const parse = (src) => recast.parse(src, {
         }
     }
 });
+
+function astReplace(src, ffilter, mmap) {
+    const ast = parse(src);
+
+    const body = ast.program.body;
+    body.filter(ffilter)
+        .map(mmap)
+        .reverse()
+        .forEach(([toReplace, ...nodes]) => body.splice(body.indexOf(toReplace), 1, ...nodes));
+
+    return recast.print(ast).code;
+}
 
 function convertImportToRequire(src) {
     return astReplace(src, node => node.type === 'ImportDeclaration', node => {
@@ -174,58 +188,92 @@ function convertImportToRequire(src) {
     });
 }
 
-// utility function, factor out in future
-function mapWithKeys(obj, cb) {
-    Object.entries(obj).map(cb).reduce((acc, [key, val]) => ({...acc, [key]: val }), {});
+const b = recast.types.builders;
+function makeExport(exportName, toExport) {
+    if (typeof toExport == 'string') toExport = b.identifier(toExport);
+
+    return b.expressionStatement(
+        b.assignmentExpression(
+            '=',
+            b.memberExpression(
+                b.identifier('exports'),
+                b.identifier(exportName)
+            ),
+            toExport
+        )
+    );
+}
+function convertExportToObject(src) {
+    return astReplace(
+        src,
+        node => node.type.startsWith('Export'),
+        node => {
+            const replacements = [];
+
+            if (node.source) {
+                throw new Error('`export <...> from "source"` is not yet supported.');
+            }
+
+            const b = recast.types.builders;
+            switch (node.type) {
+                case 'ExportNamedDeclaration':
+                    // export { a as b, c };
+                    if (node.specifiers.length) {
+                        node.specifiers.forEach(spec => {
+                            const replacement = makeExport(spec.exported.name, spec.local.name);
+                            replacements.push(replacement);
+                        });
+                    }
+                    // export const a = 'a', b = 'b';
+                    // export function () {};
+                    // export class K {}
+                    if (node.declaration) {
+                        const decl = node.declaration;
+                        replacements.push(decl);
+                        if (decl.type == 'VariableDeclaration') {
+                            decl.declarations.forEach(varDecl => {
+                                const replacement = makeExport(varDecl.id.name, varDecl.id.name);
+                                replacements.push(replacement);
+                            });
+                        } else {
+                            const replacement = makeExport(decl.id.name, decl.id.name); 
+                            replacements.push(replacement);
+                        }
+                    }
+                    break;
+                case 'ExportDefaultDeclaration':
+                    const decl = node.declaration;
+
+                    // values can be exported directly, and don't need to be declared
+                    // since they can't be accessed by other code in the module
+                    // but functions/classes might be called elsewhere,
+                    // so they need to be declared independent of their assignment to the exports object
+                    const shouldDeclareIndependently = ['FunctionExpression', 'ClassDeclaration'].includes(node.type);
+
+                    if (shouldDeclareIndependently) {
+                        replacements.push(decl);
+                    }
+
+                    const exportDecl = shouldDeclareIndependently ? decl.id.name : decl;
+                    const replacement = makeExport('default', exportDecl);
+                    replacements.push(replacement);
+                    break;
+                case 'ExportAllDeclaration':
+                    // not supported yet--see error about `export <...> from "source"` above
+
+            }
+            return [node, ...replacements];
+        });
 }
 
-function astReplace(src, ffilter, mmap) {
-    const ast = parse(src);
-
-    const body = ast.program.body;
-    body.filter(ffilter)
-        .map(mmap)
-        .reverse()
-        .forEach(([toReplace, ...nodes]) => body.splice(body.indexOf(toReplace), 1, ...nodes));
-
-    return recast.print(ast).code;
-}
-
-// really I should implement this, but for now I'll just avoid the syntax
-function convertExportFrom(src) {
-    return astReplace(src, node => node.type.startsWith('Export') && node.source, node => {
-        const src = node.source.raw;
-        switch (node.type) {
-            case 'ExportNamedDeclaration':
-                const specs = mapWithKeys(node.specifiers, spec => [spec.local.name, spec.exported.name]);
-                break;
-            case 'ExportAllDeclaration':
-        }
-        // todo: map export <...> from 'stuff'
-        // to const <...> = require('stuff'); export <...>;
-        const [requireNode, exportNode] = parse(`const ${specs} = require(${src}); export ${specs};`);
-        return [];
-    });
+function convertES6ToFunction(src) {
+    return convertImportToRequire(convertExportToObject(src));
 }
 
 async function jsHydrate(path, src) {
     try {
-        if (src.match(/^export /m)) {
-            try {
-                // I do need to replace all imports
-                // the browser context CAN access node libraries, but only through require()
-                src = convertImportToRequire(src);
-                // there is one problem remaining: customRequire() sometimes returns a promise
-                // I can't use async at the top level in modules
-                // I may need to convert exports too and go through the AsyncFunction() hydrator
-                src = `const require = customRequire.bind(null, '${normalize(path)}');\n` + src;
-                // see index.html for source and the reason why this strange pattern exists
-                return window.hydrateScript(path, src);
-            } catch(e) {
-                console.warn('Error hydrating ES6 code');
-                console.warn(src);
-                throw e;
-            }
+        if (src.match(/^export /m) || src.match(/\bimport\b/)) {
+            src = convertES6ToFunction(src);
         }
         src = [
             'const module = { exports: {} };',

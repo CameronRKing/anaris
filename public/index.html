@@ -4,40 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-    <title>Svelte app</title>
+    <title>Anaris - Applications Liberated</title>
 
     <link rel="icon" type="image/png" href="./favicon.png" />
 
-    <script>
-        // dynamic imports don't work directly within Electron
-        // they cause the app to crash with no error message
-        // they work only from the window context
-        // but Electron has access to the window context
-        const srcs = {};
-        window.onerror = function(...args) {
-            console.warn(...args);
-            // console.warn(`${url} ${srcs[url]}: ${message}, ${line}:${col}`);
-        };
-        window.hydrateScript = (path, src) => {
-            const script = document.createElement('script');
-            script.type = 'module';
-            const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
-            srcs[url] = path;
-            script.src = url;
-            script.innerHTML = src;
-            return new Promise(resolve => {
-                script.onload = () => {
-                    try {
-                        import(url).then(resolve);
-                    } catch(e) {
-                        console.warn('Error in ', path);
-                        throw e;
-                    }
-                }
-                document.head.appendChild(script);
-            })
-        }
-    </script>
     <script type="module" defer src="../src/bootstrap/index.js"></script>
   </head>
 
