@@ -17,3 +17,17 @@ function hydratePathAliases(str) {
 }
 
 exports.hydratePathAliases = hydratePathAliases;
+
+function resolvePathAliases(str) {
+    return Object.entries(aliases)
+        .reduce(
+            (ppath, [folder, alias]) => ppath.replace(new RegExp(`^${alias}/`), folder + '/'),
+            str
+        );
+}
+exports.resolvePathAliases = resolvePathAliases
+
+function remove(arr, el) {
+    arr.splice(arr.indexOf(el), 1);
+}
+exports.remove = remove;

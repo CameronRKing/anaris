@@ -5,14 +5,39 @@ const endsWith = (ext) => (str) => str.endsWith(ext);
 const mapWithKeys = (obj, cb) => Object.entries(obj).map(cb).reduce((acc, [key, val]) => ({...acc, [key]: val }), {});
 
 
+const fs = require('fs');
+const path = require('path');
+const { normalizePath, aliases, hydratePathAliases, resolvePathAliases } = require('./utils.js');
+
+function buildChain(path) {
+    const internalPath = hydratePathAliases(normalizePath(path));
+    
+    if (shouldIgnore(internalPath)) return;
+
+    const build = (src) => getBuildMethod(path)(path, src);
+    const hydrate = (src) => getHydrateMethod(path)(path, src);
+
+    return fs.promises.readFile(path, 'utf8')
+        .then(build)
+        .then(hydrate)
+        .then(obj =>  {
+            dis[internalPath] = obj;
+            return obj;
+        });
+}
+exports.buildChain = buildChain;
+
+
+
 // choosing which code to build
 // was relevant before core files were separated from app files
 // leaving it because when I get to exposing extensions to core behavior,
 // I know that I'll want it
 const ignore = [];
-exports.shouldIgnore = (str) => {
+const shouldIgnore = (str) => {
     return ignore.some(test => test(str));
 }
+exports.shouldIgnore = shouldIgnore;
 
 
 // build methods
@@ -32,7 +57,8 @@ function svelteBuild(path, src) {
         let match;
         while (match = src.match(/import (\w+) from ['"]([^'"]*\.svelte)['"]/)) {
             let [str, cmpName, importPath] = match;
-            replace(str, `$: ${cmpName} = $dis['${importPath}'] ? $dis['${importPath}'].default : null;`);
+            // I should really clean up these watchers when the component is destroyed
+            replace(str, `let ${cmpName}; dis.watch('${importPath}', cmp => ${cmpName} = cmp.default);`);
         }
 
         // replace custom components with dynamic components
@@ -78,41 +104,28 @@ exports.getBuildMethod = getBuildMethod;
 
 
 // hydration methods
-const path = require('path');
-const { normalizePath, aliases, hydratePathAliases } = require('./utils.js');
-const dis = require('./source-code-live-image.js');
-
 function customRequire(currFile, requiredFile) {
-    let newPath = normalizePath(requiredFile);
+    let toResolve = normalizePath(requiredFile);
 
     // resolve relative paths and replace root folders with aliases
-    if (newPath.startsWith('.')) {
-        const resolvedPath = path.posix.join(path.dirname(normalizePath(currFile)), newPath);
-        newPath = hydratePathAliases(resolvedPath);
+    if (toResolve.startsWith('.')) {
+        const joined = path.posix.join(
+            path.dirname(normalizePath(currFile)),
+            toResolve
+        );
+        toResolve = hydratePathAliases(joined);
     }
 
     // resolve user dependencies out of the store
-    if (Object.values(aliases).includes(newPath[0])) {
-        if (dis[newPath]) return dis[newPath];
+    // or build them into the store if they're not found
+    if (Object.values(aliases).includes(toResolve[0])) {
+        if (dis[toResolve]) return dis[toResolve];
 
-        // building the import tree might be necessary,
-        // much as I don't want to do it
-        // either that or I need to integrate a tool (what tool?) to handle it for me
-        // a quick hack is to wait until the requested file is in the store
-        // it won't work for circular dependencies,
-        // but so far it seems to be working
-        return new Promise(resolve => {
-            const unsub = dis.subscribe(store => {
-                if (store[newPath]) {
-                    unsub();
-                    resolve(store[newPath]);
-                }
-            });
-            setTimeout(5000, () => reject(`${newPath} not loaded within 5 seconds.`));
-        })
+        return dis.waitFor(toResolve);
     }
+
     // let node take care of libraries
-    return require(newPath);
+    return require(toResolve);
 }
 
 const hydrateMethods = [
