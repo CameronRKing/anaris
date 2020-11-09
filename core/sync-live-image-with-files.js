@@ -5,15 +5,13 @@ const { shouldIgnore, getBuildMethod, getHydrateMethod } = require('./build-chai
 // optional chokidar logging
 const watcherLog = [];
 // there should be a config file somewhere for this
-window.shouldLogChokidarEvents = true;
+window.shouldLogChokidarEvents = false;
 function log(event, path) {
     if (!window.shouldLogChokidarEvents) return;
     console.log(event, path);
     watcherLog.push([event, path, Date.now()]);
 }
 
-// chokidar seems to run relative to the place the process it started,
-// not relative to the filepath where the function is called
 const { buildChain } = require('./build-chain.js');
 
 function buildOn(event, watcher) {
@@ -22,11 +20,10 @@ function buildOn(event, watcher) {
         buildChain(path);
     })
 }
+
+// chokidar seems to run relative to the place the process it started,
+// not relative to the filepath where the function is called
 const watcher = chokidar.watch(['./apps', './workspaces']);
-// watcher.on('add', (path) => {
-//     log('add', path);
-//     buildChain(path);
-// });
 buildOn('change', watcher);
 
 const bootstrapper = chokidar.watch('./workspaces/home.js');

@@ -44,7 +44,7 @@ exports.shouldIgnore = shouldIgnore;
 const { compile, preprocess } = require('svelte/compiler');
 const buildMethods = [
     { test: endsWith('.svelte'), method: svelteBuild },
-    { test: endsWith('.js'), method: (path, src) => src },
+    { test: endsWith('.js'), method: jsBuild },
     { test: endsWith('.json'), method: (path, src) => src },
 ];
 
@@ -93,6 +93,18 @@ function svelteBuild(path, src) {
     }
    
 }
+
+// I should really set this up to be more pluggable
+const odb = require('./semi-omniscient-debugging.js');
+function jsBuild(path, src) {
+    if (odb.shouldTransform(src)) {
+        const ast = recast.parse(src);
+        const transformed = odb.transformJSCode(ast, path);
+        return recast.print(transformed).code;
+    }
+    return src;
+}
+
 function getBuildMethod(path) {
     const build = buildMethods.find(({ test }) => test(path));
     if (!build) throw new Error(`No build method found for ${path}`);
@@ -296,7 +308,7 @@ async function jsHydrate(path, src) {
 
         return hydrate(path, src);
     } catch(e) {
-        console.warn('Error in', path);
+        console.warn('Error in', path, src);
         throw e;
     }
 }
