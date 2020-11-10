@@ -48,7 +48,7 @@ const buildMethods = [
     { test: endsWith('.json'), method: (path, src) => src },
 ];
 
-function svelteBuild(path, src) {
+function svelteBuild(filePath, src) {
     try {
         const replace = (...args) => src = src.replace(...args);
 
@@ -57,6 +57,14 @@ function svelteBuild(path, src) {
         let match;
         while (match = src.match(/import (\w+) from ['"]([^'"]*\.svelte)['"]/)) {
             let [str, cmpName, importPath] = match;
+            // resolve relative imports
+            if (importPath.startsWith('.')) {
+                const joined = path.posix.join(
+                    path.dirname(normalizePath(filePath)),
+                    importPath
+                );
+                importPath = hydratePathAliases(joined)
+            }
             // I should really clean up these watchers when the component is destroyed
             replace(str, `let ${cmpName}; dis.watch('${importPath}', cmp => ${cmpName} = cmp.default);`);
         }
@@ -78,7 +86,7 @@ function svelteBuild(path, src) {
         */
 
         const { js } = compile(src, {
-            filename: path,
+            filename: filePath,
             format: 'cjs',
             dev: true,
             accessors: true,
@@ -88,7 +96,7 @@ function svelteBuild(path, src) {
         // no, since that logic is tied to the specific hydration method
         return js.code;
     } catch(e) {
-        console.warn(path, 'Error-throwing code:\n\n', src);
+        console.warn(filePath, 'Error-throwing code:\n\n', src);
         throw e;
     }
    
@@ -130,14 +138,16 @@ function customRequire(currFile, requiredFile) {
 
     // resolve user dependencies out of the store
     // or build them into the store if they're not found
-    if (Object.values(aliases).includes(toResolve[0])) {
+    if (Object.values(aliases).includes(toResolve[0]) && toResolve[1] == '/') {
         if (dis[toResolve]) return dis[toResolve];
 
         return dis.waitFor(toResolve);
     }
 
     // let node take care of libraries
-    return require(toResolve);
+    const mod = require(toResolve);
+    // reorganizing the object a little for better integration with ES6 modules
+    return { default: mod, ...mod };
 }
 
 const hydrateMethods = [
@@ -213,9 +223,13 @@ function convertImportToRequire(src) {
 }
 
 const b = recast.types.builders;
+const n = recast.types.namedTypes;
 function makeExport(exportName, toExport) {
     if (typeof toExport == 'string') toExport = b.identifier(toExport);
-
+    if (n.ClassDeclaration.check(toExport)) {
+        const { id, body, superClass } = toExport;
+        toExport = b.classExpression(id, body, superClass);
+    }
     return b.expressionStatement(
         b.assignmentExpression(
             '=',
