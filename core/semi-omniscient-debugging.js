@@ -23,18 +23,27 @@ function transformJSCode(ast, fileName) {
         );
 
         path.replace(withWrapperCall);
+
+        return node;
     };
 
     visit(ast, {
         visitCallExpression(path) {
+            this.traverse(path);
             replace(path);
-            return false;
         },
         visitMemberExpression(path) {
-            const isOnLeftSideOfAssignment = path.parent.node.type === 'AssignmentExpression'
-                && path.name === 'left';
+            const pNode = path.parent.node;
+            const exceptions = {
+                isOnLeftSideOfAssignment: pNode.type === 'AssignmentExpression' && path.name === 'left',
+                // intercepting functions on objects messes with the value of `this`
+                isInCallExpression: pNode.type === 'CallExpression'
+            }
 
-            if (isOnLeftSideOfAssignment) return false;
+            const match = Object.entries(exceptions).find(([key, matches]) => matches);
+            if (match) {
+                return false;
+            }
 
             replace(path);
             return false;
@@ -65,7 +74,8 @@ function transformJSCode(ast, fileName) {
         }
     });
 
-    ast.program.body.push(recast.parse('const odb = (val, loc) => { console.log(val, loc); return val; }').program.body[0]);
+    const statements = recast.parse(`const odb = window.odb;`).program.body;
+    ast.program.body.splice(ast.program.body.length, 0, ...statements);
 
     return ast;
 }

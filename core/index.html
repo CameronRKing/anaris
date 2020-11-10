@@ -8,6 +8,56 @@
 
     <link rel="icon" type="image/png" href="./favicon.png" />
 
+    <!-- I strongly dislike that I have to add scripts to the page to load monaco -->
+    <script>
+        (function () {
+            const path = require('path');
+            const amdLoader = require('../node_modules/monaco-editor/min/vs/loader.js');
+            const amdRequire = amdLoader.require;
+            const amdDefine = amdLoader.require.define;
+
+            function uriFromPath(_path) {
+                var pathName = path.resolve(_path).replace(/\\/g, '/');
+                if (pathName.length > 0 && pathName.charAt(0) !== '/') {
+                    pathName = '/' + pathName;
+                }
+                return encodeURI('file://' + pathName);
+            }
+
+            amdRequire.config({
+                baseUrl: uriFromPath(path.join(__dirname, '../node_modules/monaco-editor/min'))
+            });
+
+            // workaround monaco-css not understanding the environment
+            self.module = undefined;
+
+            window.monacoReady = new Promise(resolve => {
+                amdRequire(['vs/editor/editor.main'], resolve);
+            });
+        })();
+    </script>
+
+    <script>
+        window.odb_log = [];
+        window.odb_cbs = [];
+        window.odb_subscribe = (cb) => {
+            window.odb_cbs.push(cb);
+        }
+        window.odb = (val, loc) => {
+            const row = [loc, odbserialize(val)];
+            window.odb_log.push(row);
+            window.odb_cbs.forEach(cb => cb(row))
+            return val;
+        }
+        const odbserialize = (val) => {
+            if (typeof val === 'function') return '() => {}';
+            try {
+                return JSON.stringify(val);
+            } catch(e) {
+                return '{ "error": "object contains circular references" }';
+            }
+        }
+    </script>
     <script type="module" defer src="./bootstrap.js"></script>
   </head>
 
