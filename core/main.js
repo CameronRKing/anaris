@@ -11,11 +11,13 @@ const createWindow = () => {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
     // these bits should be user-configured
+    backgroundColor: '#fff',
     width: 800,
     height: 600,
     fullscreen: true,
     webPreferences: {
-      nodeIntegration: true
+      nodeIntegration: true,
+      enableRemoteModule: true
     }
   });
 

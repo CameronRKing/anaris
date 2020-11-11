@@ -1,4 +1,24 @@
-@import '~@lumino/default-theme';
+@import '../node_modules/@lumino/dragdrop/style/index.css';
+@import '../node_modules/@lumino/widgets/style/index.css';
+@import '../node_modules/@lumino/default-theme/style/commandpalette.css';
+@import '../node_modules/@lumino/default-theme/style/datagrid.css';
+@import '../node_modules/@lumino/default-theme/style/dockpanel.css';
+@import '../node_modules/@lumino/default-theme/style/menu.css';
+@import '../node_modules/@lumino/default-theme/style/menubar.css';
+@import '../node_modules/@lumino/default-theme/style/scrollbar.css';
+@import '../node_modules/@lumino/default-theme/style/tabbar.css';
+
+/*
+	Widgets don't display properly for a reason I don't comprehend.
+	Their height is auto-set to 0.
+*/
+.lm-Widget {
+    height: 100% !important;
+}
+
+.svelte-widget {
+	overflow: auto;
+}
 
 html, body {
 	position: relative;
