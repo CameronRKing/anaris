@@ -226,10 +226,15 @@ const b = recast.types.builders;
 const n = recast.types.namedTypes;
 function makeExport(exportName, toExport) {
     if (typeof toExport == 'string') toExport = b.identifier(toExport);
+
     if (n.ClassDeclaration.check(toExport)) {
         const { id, body, superClass } = toExport;
         toExport = b.classExpression(id, body, superClass);
+    } else if (n.FunctionDeclaration.check(toExport)) {
+        const { id, params, body } = toExport;
+        toExport = b.functionExpression(id, params, body);
     }
+    
     return b.expressionStatement(
         b.assignmentExpression(
             '=',
