@@ -7,25 +7,76 @@ const mapWithKeys = (obj, cb) => Object.entries(obj).map(cb).reduce((acc, [key, 
 
 const fs = require('fs');
 const path = require('path');
-const { normalizePath, aliases, hydratePathAliases, resolvePathAliases } = require('./utils.js');
+const { internalPath, normalizePath, aliases, hydratePathAliases, resolvePathAliases, instrument } = require('./utils.js');
+
 
 function buildChain(path) {
-    const internalPath = hydratePathAliases(normalizePath(path));
+    const hook = arguments.callee.hook;
     
-    if (shouldIgnore(internalPath)) return;
+    if (shouldIgnore(internalPath(path))) return;
 
     const build = (src) => getBuildMethod(path)(path, src);
     const hydrate = (src) => getHydrateMethod(path)(path, src);
 
-    return fs.promises.readFile(path, 'utf8')
-        .then(build)
-        .then(hydrate)
-        .then(obj =>  {
-            dis[internalPath] = obj;
-            return obj;
-        });
+    return hook('read', () => fs.promises.readFile(path, 'utf8'))()
+        .then(hook('build', build))
+        .then(hook('hydrate', hydrate));
 }
-exports.buildChain = buildChain;
+
+const EventEmitter = require('events');
+class LiveLog extends EventEmitter {
+    constructor() {
+        super();
+        this.log = [];
+    }
+
+    start(item) {
+        this.log.push(item);
+        this.emit('start');
+        return item;
+    }
+
+    finish(item, cb) {
+        cb(item);
+        this.emit('finish');
+    }
+
+    find(filter) {
+        return this.log.filter(item => {
+            return Object.entries(filter).every(([key, val]) => {
+                if (val instanceof Function) return val(item[key]);
+                if (val instanceof RegExp) return item[key] && typeof item[key].match === 'function' && item[key].match(val);
+                return item[key] == val;
+            });
+        });
+    }
+}
+window.buildLog = new LiveLog();
+
+
+exports.buildChain = instrument({
+    fn: buildChain,
+    before: (path) => buildLog.start({ path, start: Date.now() }),
+    after: (memento) => buildLog.finish(memento, (mem) => {
+        mem.end = Date.now();
+        mem.length = mem.end - mem.start;
+    }),
+    hook: (event, memento) => {
+        const startTime = (evt) => () => memento[`${evt}Start`] = Date.now();
+        const endTime = (evt) => () => {
+            memento[`${evt}End`] = Date.now();
+            memento[`${evt}Length`] = memento[`${evt}End`] - memento[`${evt}Start`];
+        }
+
+        const hooks = ['read', 'build', 'hydrate'].reduce((hooks, stage) => ({
+            ...hooks,
+            [stage + '-start']: startTime(stage),
+            [stage + '-end']: endTime(stage)
+        }), {});
+
+        hooks[event]();
+    }
+});
 
 
 
@@ -124,7 +175,10 @@ exports.getBuildMethod = getBuildMethod;
 
 
 // hydration methods
-function customRequire(currFile, requiredFile) {
+window.requireLog = new LiveLog();
+function rrequire(currFile, requiredFile) {
+    const hook = arguments.callee.hook;
+
     let toResolve = normalizePath(requiredFile);
 
     // resolve relative paths and replace root folders with aliases
@@ -139,16 +193,38 @@ function customRequire(currFile, requiredFile) {
     // resolve user dependencies out of the store
     // or build them into the store if they're not found
     if (Object.values(aliases).includes(toResolve[0]) && toResolve[1] == '/') {
-        if (dis[toResolve]) return dis[toResolve];
+        if (dis[toResolve]) {
+            hook('in-dis');
+            return dis[toResolve];
+        }
 
-        return dis.waitFor(toResolve);
+
+        return hook('wait-dis', () => dis.waitFor(toResolve))();
     }
 
     // let node take care of libraries
-    const mod = require(toResolve);
+    const mod = hook('node-req', () => require(toResolve))();
     // reorganizing the object a little for better integration with ES6 modules
     return { default: mod, ...mod };
 }
+const customRequire = instrument({
+    fn: rrequire,
+    before: (currFile, requiredFile) => buildLog.start({ from: currFile, path: requiredFile, start: Date.now() }),
+    after: (memento) => buildLog.finish(memento, (mem) => { mem.end = Date.now(); mem.length = mem.end - mem.start; }),
+    hook: (event, memento) => {
+        const name = event.split('-')[0]
+        if (event.endsWith('-start')) {
+            memento.type = name;
+            memento[`${name}Start`] = Date.now();
+        } else if (event.endsWith('-end')) {
+            memento[`${name}End`] = Date.now();
+            memento[`${name}Length`] = memento[`${name}End`] - memento[`${name}Start`];
+        } else {
+            memento.type = event;
+        }
+    }
+});
+exports.customRequire = customRequire;
 
 const hydrateMethods = [
     { test: endsWith('.svelte'), method: svelteHydrate },

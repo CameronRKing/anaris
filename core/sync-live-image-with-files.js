@@ -1,6 +1,7 @@
 const chokidar = require('chokidar');
 const fs = require('fs');
 const { shouldIgnore, getBuildMethod, getHydrateMethod } = require('./build-chain.js');
+const { internalPath } = require('./utils.js');
 
 // optional chokidar logging
 const watcherLog = [];
@@ -17,7 +18,8 @@ const { buildChain } = require('./build-chain.js');
 function buildOn(event, watcher) {
     watcher.on(event, path => {
         log(event, path);
-        buildChain(path);
+        buildChain(path)
+            .then(obj => dis[internalPath(path)] = obj);
     })
 }
 

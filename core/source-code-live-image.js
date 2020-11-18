@@ -25,7 +25,10 @@ const proxiedStore = new Proxy(actualStoreObject, {
     get(target, prop, receiver) {
         if (!target[prop] && !building[prop]) {
             building[prop] = true;
-            buildChain(resolvePathAliases(prop)).then(() => building[prop] = false);
+            buildChain(resolvePathAliases(prop)).then(obj => {
+                proxiedStore[prop] = obj;
+                building[prop] = false
+            });
         }
         return target[prop];
     },
@@ -45,27 +48,22 @@ const dis = new Proxy({
         return new Promise((resolve, reject) => {
             const MAX_WAIT = 5000;
             const timeout = setTimeout(() => reject(`${path} not loaded within ${MAX_WAIT}ms`), MAX_WAIT);
-            const unsub = base.subscribe(store => {
-                if (store[path]) {
-                    unsub();
-                    clearTimeout(timeout);
-                    resolve(store[path]);
-                }
-            });
+            dis.watch(path, resolve).then(unsub => unsub());
         });
     },
     watch(path, cb) {
         if (!watchers[path]) watchers[path] = [];
         watchers[path].push(cb);
         // return a promise that resolves when a value is available
+        const unsub = () => remove(watchers[path], cb);
         return new Promise((resolve, reject) => {
             if (proxiedStore[path]) {
                 cb(proxiedStore[path]);
-                resolve(() => remove(watchers[path], cb));
+                resolve(unsub);
             }
             const fn = () => {
                 remove(watchers[path], fn);
-                resolve(() => remove(watchers[path], cb));
+                resolve(unsub);
             }
             watchers[path].push(fn);
         });

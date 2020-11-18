@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, Menu } = require('electron');
 const path = require('path');
 
 // Live Reload
@@ -27,6 +27,37 @@ const createWindow = () => {
   // Open the DevTools.
   // this bit should be user-configured
   mainWindow.webContents.openDevTools();
+
+  // really, I just want to prevent ctrl+w from closing the window right now
+  const template = [
+    {
+      role: 'view',
+      submenu: [
+        {
+          label: 'Toggle fullscreen',
+          click: () => {
+            mainWindow.setFullScreen(!mainWindow.isFullScreen());
+          },
+          accelerator: 'F11'
+        },
+        {
+          label: 'Refresh',
+          click: () => {
+            mainWindow.reload();
+          },
+          accelerator: 'Ctrl+R'
+        },
+        {
+          label: 'Toggle devtools',
+          click: () => {
+            mainWindow.webContents.toggleDevTools();
+          },
+          accelerator: 'Ctrl+Shift+I'
+        }
+      ]
+    }
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 };
 
 // This method will be called when Electron has finished
